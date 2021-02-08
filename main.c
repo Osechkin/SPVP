@@ -587,7 +587,25 @@ void main(void)
 	// Data containers ------------------------------------------------------------------
 	samples_buffer = (uint8_t*)malloc(SAMPLES_BUFFER_SIZE*sizeof(uint8_t));
 	samples_buffer_pos = 0;
-	initDataSamples(data_samples);
+	for (i = 0; i < UPP_DATA_COUNT; i++)
+	{
+		DataSample *data_sample = (DataSample*) malloc(sizeof(DataSample));
+		//data_sample->data_ptr = samples_buffer[i];
+		data_sample->data_ptr = 0;
+		data_sample->data_len = 0;
+		data_sample->echo_number = 0;
+		data_sample->proc_id = 0;
+		data_sample->tool_id = 0;
+		data_sample->channel_id = 0;
+		//data_sample->heap_ptr = data_heap[i];
+		//data_sample->heap_len = 0;
+		data_sample->tag = 0;
+		data_samples[i] = data_sample;
+	}
+	current_data_sample = 0;
+	samples_buffer_pos = 0;
+	ds_new_data_enabled = 1;
+	//initDataSamples(data_samples);
 	// ----------------------------------------------------------------------------------
 
 
@@ -605,7 +623,12 @@ void main(void)
 	fpga_prg_started = False;
 
 	instr = (Data_Cmd*) malloc(sizeof(Data_Cmd));
-	init_DataProcCmd(instr);
+	instr->cmd = 0;
+	instr->count = 0;
+	instr->type = 0;
+	//instr->params = 0;
+	instr->params = (float*)calloc(32, sizeof(float));
+	//init_DataProcCmd(instr);
 
 
 #ifdef USE_TIMING
@@ -670,6 +693,12 @@ void main(void)
 			incom_msg_state = NOT_DEFINED;
 			tool_state = FREE;
 
+			timerSettings.enabled = True;
+			enable_Timer(tmrRegs);
+
+			startClocker(clocker3);
+			startClocker(clocker4);
+
 			//printf("ds_proc_data_index = %d; current_data_sample = %d\n", ds_proc_data_index, current_data_sample);
 			//ds_proc_data_index = 0;
 			//current_data_sample = 0;
@@ -733,11 +762,11 @@ void main(void)
 			memset(upp_buffer, 0x0, UPP_BUFF_SIZE);
 			upp_start(byte_count, line_count, upp_buffer); // старт UPP канала дл€ приема новых данных яћ–
 
-			if (timerSettings.enabled == False)
-			{
-				timerSettings.enabled = True;
-				enable_Timer(tmrRegs);
-			}
+			timerSettings.enabled = False;
+			enable_Timer(tmrRegs);
+
+			stopClocker(clocker3);
+			stopClocker(clocker4);
 
 			seq_completed = -1;
 
@@ -746,7 +775,26 @@ void main(void)
 
 		if (tool_state == BUSY)
 		{
+			if (timerSettings.enabled == True)
+			{
+				timerSettings.enabled = False;
+				enable_Timer(tmrRegs);
 
+				stopClocker(clocker3);
+				stopClocker(clocker4);
+			}
+		}
+
+		if (tool_state == FREE || tool_state == UNKNOWN_STATE)
+		{
+			if (timerSettings.enabled == False)
+			{
+				timerSettings.enabled = True;
+				enable_Timer(tmrRegs);
+
+				startClocker(clocker3);
+				startClocker(clocker4);
+			}
 		}
 
 
@@ -1361,11 +1409,11 @@ void pressureUnitDataToOutput(OutBuffer *out_buff)
 	signed int mtr_counter = proger_read_counter_mtr ();
 	unsigned int mtr_status = proger_read_mtr_status ();
 
-	if ((mtr_status & 0x4) >> 2 && clocker4->max_val < 10000)
+	/*if ((mtr_status & 0x4) >> 2 && clocker4->max_val < 10000)
 	{
 		clocker4->max_val = 10000;
 		startClocker(clocker4);
-	}
+	}*/
 
 	float *dst = out_buff->out_data;
 	int dst_pos = out_buff->full_size;
@@ -1960,6 +2008,7 @@ void executeShortMsg(MsgHeader *_msg_header)
 
 		startClocker(clocker3);
 		startClocker(clocker4);		// added 16.08.2017
+		tool_state = FREE;
 		incom_msg_state = NOT_DEFINED;
 
 		break;
@@ -2108,6 +2157,9 @@ void executeMultypackMsg(UART_Message *uart_msg)
 
 						fpga_prg_started = True;
 
+						timerSettings.enabled = False;
+						enable_Timer(tmrRegs);
+
 						stopClocker(clocker3);
 						stopClocker(clocker4);		// added 16.08.2017
 						incom_msg_state = NOT_DEFINED;
@@ -2130,6 +2182,9 @@ void executeMultypackMsg(UART_Message *uart_msg)
 
 			outcom_msg_state = MESSAGE_SENT;
 			clearMsgHeader(out_msg.msg_header);
+
+			timerSettings.enabled = True;
+			enable_Timer(tmrRegs);
 
 			startClocker(clocker3);
 			startClocker(clocker4);		// added 16.08.2017
@@ -2172,7 +2227,7 @@ void executeMultypackMsg(UART_Message *uart_msg)
 				sendShortMsg(hdr, uartRegs);
 			}
 			incom_msg_state = NOT_DEFINED;
-			tool_state = FREE;
+			//tool_state = FREE;
 
 			outcom_msg_state = MESSAGE_SENT;
 			clearMsgHeader(out_msg.msg_header);
@@ -2217,7 +2272,7 @@ void executeMultypackMsg(UART_Message *uart_msg)
 				sendShortMsg(hdr, uartRegs);
 			}
 			incom_msg_state = NOT_DEFINED;
-			tool_state = FREE;
+			//tool_state = FREE;
 
 			outcom_msg_state = MESSAGE_SENT;
 			clearMsgHeader(out_msg.msg_header);
@@ -2268,7 +2323,7 @@ void executeMultypackMsg(UART_Message *uart_msg)
 			sendShortMsg(hdr, uartRegs);
 
 			incom_msg_state = NOT_DEFINED;
-			tool_state = FREE;
+			//tool_state = FREE;
 
 			outcom_msg_state = MESSAGE_SENT;
 			clearMsgHeader(out_msg.msg_header);
@@ -2768,7 +2823,7 @@ void create_Clockers(void)
 	// create UART message clockers (for header trapping)
 	clocker1 = (Clocker*) malloc(sizeof(Clocker));
 	clockers[1] = clocker1;
-	initClocker(1000, clocker1_ISR, clocker1); // it was 20
+	initClocker(2000, clocker1_ISR, clocker1); // it was 20
 
 	// create UART message clockers (for packet trapping)
 	clocker2 = (Clocker*) malloc(sizeof(Clocker));
@@ -2778,7 +2833,7 @@ void create_Clockers(void)
 	// create clocker for repetition time tests (delay between pulse sequences)
 	clocker3 = (Clocker*) malloc(sizeof(Clocker));
 	clockers[3] = clocker3;
-	initClocker(2000, clocker3_ISR, clocker3);
+	initClocker(1000, clocker3_ISR, clocker3);
 
 	// create clocker for telemetry measurements (delay between measurements)
 	clocker4 = (Clocker*) malloc(sizeof(Clocker));
